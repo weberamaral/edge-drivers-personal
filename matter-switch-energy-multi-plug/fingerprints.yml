@@ -1,0 +1,7 @@
+matterGeneric:
+  - id: "matter-switch-energy-multi-plug"
+    deviceLabel: "Tuya Smart Plug Energy Monitoring with Multi Switch exposed over Matter"
+    deviceTypes:
+      - id: 0x010A # On Off Plug-in Unit
+      - id: 0x0510 # Electrical Sensor
+    deviceProfileName: plug-power-energy-powerConsumption

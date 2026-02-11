@@ -1,0 +1,6 @@
+name: "Matter Bridged Tuya Multi Plug - (Power/Energy)"
+packageKey: "matter-switch-energy-multi-plug"
+permissions:
+  matter: {}
+description: "SmartThings driver for Matter bridged Tuya Multi Plug with power/energy + powerConsumptionReport"
+vendorSupportInformation: "https://github.com/weberamaral/edge-drivers-personal"
