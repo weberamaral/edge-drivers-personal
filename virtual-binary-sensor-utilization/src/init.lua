@@ -1,6 +1,8 @@
 local MatterDriver        = require "st.matter.driver"
 local capabilities        = require "st.capabilities"
 
+local cycleCap            = capabilities["signalprogram56169.cycleState"]
+
 local clusters            = require "st.matter.clusters" -- conforme doc oficial
 local BooleanState        = clusters.BooleanState
 local PowerSource         = clusters.PowerSource
@@ -43,15 +45,22 @@ local function finalize_cycle_if_due(device)
   local gap = now_seconds() - last_stop
   if gap < END_GAP_SECONDS then return end
 
-  -- Aqui consideramos que o ciclo terminou
   if acc >= MIN_RUNTIME_SECONDS then
     device.log.info(string.format("Cycle finished. duration=%ds (~%.1f min)", acc, acc / 60))
-    -- Se quiser, aqui no futuro você emite custom capability com duração/timestamp.
+
+    device:set_field("cycle_state", "completed", { persist = false })
+    device:emit_event(cycleCap.cycleState("completed", { state_change = true }))
+
+    device.thread:call_with_delay(3, function()
+      device:set_field("cycle_state", "idle", { persist = false })
+      device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
+    end)
   else
     device.log.info(string.format("Ignored short run (noise). duration=%ds", acc))
+    -- opcional: garantir idle aqui também
+    device:set_field("cycle_state", "idle", { persist = false })
   end
 
-  -- Reset para o próximo ciclo
   device:set_field("run_accumulated_s", 0, { persist = false })
   device:set_field("last_stop_at", nil, { persist = false })
 end
@@ -87,21 +96,26 @@ local function boolean_state_handler(driver, device, ib, response)
   local in_use = (value == false) -- false=rodando, true=parado
 
   if in_use then
-    -- Rodando: cancela timer de "parou", inicia/retoma contagem
     clear_timer(device, "debounce_timer")
+
+    local current = device:get_field("cycle_state") or "idle"
+    if current ~= "running" then
+      device:set_field("cycle_state", "running", { persist = false })
+      device:emit_event(cycleCap.cycleState("running", { state_change = true }))
+    end
+
     start_running(device)
     emit_utilization(device, true)
     return
   end
 
-  -- Possível parada: confirma só após debounce
   set_timer(device, "debounce_timer", DEBOUNCE_SECONDS, function()
     emit_utilization(device, false)
 
-    -- Fecha o "trecho" rodando e acumula
-    stop_running_and_accumulate(device)
+    device:set_field("cycle_state", "idle", { persist = false })
+    device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
 
-    -- Se ficar parado tempo suficiente, considera fim de ciclo
+    stop_running_and_accumulate(device)
     finalize_cycle_if_due(device)
   end)
 end
@@ -126,7 +140,10 @@ end
 local function device_init(driver, device)
   clear_timer(device, "debounce_timer")
   device:subscribe()
+
   emit_utilization(device, false) -- assume parado
+  device:set_field("cycle_state", "idle", { persist = false })
+  device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
 end
 
 local function device_added(driver, device)
@@ -137,7 +154,10 @@ end
 local function device_driver_switched(driver, device, event, args)
   clear_timer(device, "debounce_timer")
   device:subscribe()
+
   emit_utilization(device, false)
+  device:set_field("cycle_state", "idle", { persist = false })
+  device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
 
   device:send(BooleanState.attributes.StateValue:read(device))
   device:send(PowerSource.attributes.BatPercentRemaining:read(device))

@@ -1,0 +1,22 @@
+{
+  "id": "weber.cycleState",
+  "version": 1,
+  "status": "proposed",
+  "name": "Cycle State",
+  "attributes": {
+    "cycleState": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "type": "string",
+            "enum": ["idle", "running", "completed"]
+          }
+        },
+        "required": ["value"]
+      }
+    }
+  },
+  "commands": {}
+}

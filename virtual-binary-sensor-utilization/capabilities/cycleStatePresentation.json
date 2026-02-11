@@ -1,0 +1,58 @@
+{
+  "dashboard": {
+    "states": [],
+    "actions": []
+  },
+  "detailView": [
+    {
+      "label": "{{i18n.label}}",
+      "displayType": "state",
+      "state": {
+        "label": "{{cycleState.value}}",
+        "alternatives": [
+          {
+            "key": "idle",
+            "value": "{{i18n.attributes.cycleState.i18n.value.idle.label}}",
+            "type": "inactive"
+          },
+          {
+            "key": "running",
+            "value": "{{i18n.attributes.cycleState.i18n.value.running.label}}",
+            "type": "active"
+          },
+          {
+            "key": "completed",
+            "value": "{{i18n.attributes.cycleState.i18n.value.completed.label}}",
+            "type": "active"
+          }
+        ]
+      }
+    }
+  ],
+  "automation": {
+    "conditions": [
+      {
+        "label": "{{i18n.label}}",
+        "displayType": "list",
+        "list": {
+          "value": "cycleState.value",
+          "alternatives": [
+            {
+              "key": "idle",
+              "value": "{{i18n.attributes.cycleState.i18n.value.idle.label}}"
+            },
+            {
+              "key": "running",
+              "value": "{{i18n.attributes.cycleState.i18n.value.running.label}}"
+            },
+            {
+              "key": "completed",
+              "value": "{{i18n.attributes.cycleState.i18n.value.completed.label}}"
+            }
+          ]
+        }
+      }
+    ],
+    "actions": []
+  }
+}

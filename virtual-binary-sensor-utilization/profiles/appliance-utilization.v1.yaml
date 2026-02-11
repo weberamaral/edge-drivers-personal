@@ -4,6 +4,8 @@ components:
     capabilities:
       - id: applianceUtilization
         version: 1
+      - id: signalprogram56169.cycleState
+        version: 1
       - id: battery
         version: 1
       - id: refresh
