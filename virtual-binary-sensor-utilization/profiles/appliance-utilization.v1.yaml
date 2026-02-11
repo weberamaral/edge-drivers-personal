@@ -1,0 +1,16 @@
+name: appliance-utilization.v1
+components:
+  - id: main
+    capabilities:
+      - id: applianceUtilization
+        version: 1
+      - id: battery
+        version: 1
+      - id: refresh
+        version: 1
+      - id: healthCheck
+        version: 1
+    categories:
+      - name: Washer
+metadata:
+  ocfDeviceType: oic.d.washer

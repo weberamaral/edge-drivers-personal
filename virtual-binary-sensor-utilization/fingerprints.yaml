@@ -1,0 +1,8 @@
+matterGeneric:
+  - id: "weber-mb-utilization-01"
+    deviceLabel: "Lava e Seca (Execução)"
+    deviceTypes:
+      - id: 0x0013
+      - id: 0x0011
+      - id: 0x0015
+    deviceProfileName: appliance-utilization.v1
