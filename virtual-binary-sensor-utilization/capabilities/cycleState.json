@@ -1,6 +1,6 @@
 {
-  "id": "weber.cycleState",
-  "version": 1,
+  "id": "signalprogram56169.cycleState",
+  "version": 2,
   "status": "proposed",
   "name": "Cycle State",
   "attributes": {
@@ -11,7 +11,7 @@
         "properties": {
           "value": {
             "type": "string",
-            "enum": ["idle", "running", "completed"]
+            "enum": ["idle", "started", "running", "completed"]
           }
         },
         "required": ["value"]

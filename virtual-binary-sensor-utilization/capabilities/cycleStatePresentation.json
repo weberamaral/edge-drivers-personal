@@ -16,6 +16,11 @@
             "type": "inactive"
           },
           {
+            "key": "started",
+            "value": "{{i18n.attributes.cycleState.i18n.value.started.label}}",
+            "type": "active"
+          },
+          {
             "key": "running",
             "value": "{{i18n.attributes.cycleState.i18n.value.running.label}}",
             "type": "active"
@@ -40,6 +45,10 @@
             {
               "key": "idle",
               "value": "{{i18n.attributes.cycleState.i18n.value.idle.label}}"
+            },
+            {
+              "key": "started",
+              "value": "{{i18n.attributes.cycleState.i18n.value.started.label}}"
             },
             {
               "key": "running",
