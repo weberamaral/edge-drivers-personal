@@ -140,6 +140,12 @@ local function finalize_cycle_if_due(device)
   reset_cycle_tracking(device)
 end
 
+local function schedule_end_gap_check(device)
+  set_timer(device, "end_gap_timer", END_GAP_SECONDS, function()
+    finalize_cycle_if_due(device)
+  end)
+end
+
 -- =========================
 -- Matter readiness guard (evita matter_channel nil)
 -- =========================
@@ -183,14 +189,14 @@ local function boolean_state_handler(driver, device, ib, response)
   if in_use then
     -- voltou a usar: cancela timers de parada e do hold de completed
     clear_timer(device, "debounce_timer")
-    clear_timer(device, "completed_hold_timer")
+    clear_timer(device, "end_gap_timer")
 
     local current = get_cycle_state(device)
 
     -- Se estava idle ou completed, entra em started e agenda promoção
-    if current == "idle" or current == "completed" then
-      set_cycle_state(device, "started")
-      schedule_started_to_running(device)
+    if current ~= "running" then
+      device:set_field("cycle_state", "running", { persist = false })
+      device:emit_event(cycleCap.cycleState("running", { state_change = true }))
     end
     -- Se já estava started/running, mantém
 
@@ -203,16 +209,13 @@ local function boolean_state_handler(driver, device, ib, response)
   set_timer(device, "debounce_timer", DEBOUNCE_SECONDS, function()
     emit_utilization(device, false)
 
-    -- NÃO seta idle aqui imediatamente:
-    -- deixa o estado "started/running" enquanto avaliamos gap e duração.
-    stop_running_and_accumulate(device)
-    finalize_cycle_if_due(device)
+    device:set_field("cycle_state", "idle", { persist = false })
+    device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
 
-    -- Se não completou (ainda), e não está em uso, pode voltar para idle
-    -- (Isso mantém a semântica: só fica "completed" quando realmente terminou)
-    if device:get_field("in_use") ~= true and get_cycle_state(device) ~= "completed" then
-      set_cycle_state(device, "idle")
-    end
+    stop_running_and_accumulate(device)
+
+    -- Agora sim: agenda a validação do fim do ciclo para daqui END_GAP_SECONDS
+    schedule_end_gap_check(device)
   end)
 end
 
@@ -238,6 +241,7 @@ end
 -- =========================
 local function device_init(driver, device)
   clear_timer(device, "debounce_timer")
+  clear_timer(device, "end_gap_timer")
   clear_timer(device, "started_timer")
   clear_timer(device, "completed_hold_timer")
 
@@ -258,6 +262,7 @@ end
 local function device_driver_switched(driver, device, event, args)
   -- NÃO chame subscribe/send direto aqui (pode estar sem matter_channel)
   clear_timer(device, "debounce_timer")
+  clear_timer(device, "end_gap_timer")
   clear_timer(device, "started_timer")
   clear_timer(device, "completed_hold_timer")
 
