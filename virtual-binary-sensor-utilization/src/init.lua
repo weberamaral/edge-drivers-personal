@@ -120,30 +120,42 @@ end
 -- =========================
 -- Finaliza ciclo se parar estável por END_GAP
 -- =========================
-local function finalize_cycle_if_due(device)
+local function finalize_cycle_if_due(device, expected_stop_at)
   local acc = device:get_field("run_accumulated_s") or 0
   local last_stop = device:get_field("last_stop_at")
 
   if not last_stop then return end
+
+  -- Proteção: se um novo stop aconteceu depois, ignora este timer antigo
+  if expected_stop_at and last_stop ~= expected_stop_at then
+    return
+  end
+
   local gap = now_seconds() - last_stop
   if gap < END_GAP_SECONDS then return end
 
   if acc >= MIN_RUNTIME_SECONDS then
     device.log.info(string.format("Cycle finished. duration=%ds (~%.1f min)", acc, acc / 60))
-    set_cycle_state(device, "completed")
-    schedule_completed_hold_to_idle(device)
+
+    device:set_field("cycle_state", "completed", { persist = false })
+    device:emit_event(cycleCap.cycleState("completed", { state_change = true }))
+
+    -- (opcional) depois de X min volta para idle.
+    -- Se você quiser segurar "completed" por 5 minutos:
+    device.thread:call_with_delay(300, function()
+      device:set_field("cycle_state", "idle", { persist = false })
+      device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
+    end)
   else
     device.log.info(string.format("Ignored short run (noise). duration=%ds", acc))
-    set_cycle_state(device, "idle")
+    device:set_field("cycle_state", "idle", { persist = false })
+    device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
   end
 
-  reset_cycle_tracking(device)
-end
-
-local function schedule_end_gap_check(device)
-  set_timer(device, "end_gap_timer", END_GAP_SECONDS, function()
-    finalize_cycle_if_due(device)
-  end)
+  -- Reset para o próximo ciclo
+  device:set_field("run_accumulated_s", 0, { persist = false })
+  device:set_field("run_started_at", nil, { persist = false })
+  device:set_field("last_stop_at", nil, { persist = false })
 end
 
 -- =========================
@@ -182,40 +194,50 @@ local function boolean_state_handler(driver, device, ib, response)
   local value = ib.data.value
   if value == nil then return end
 
-  -- Seu mapeamento: false=rodando (em uso), true=parado
-  local in_use = (value == false)
-  device:set_field("in_use", in_use, { persist = false })
+  local in_use = (value == false) -- false=rodando, true=parado
 
   if in_use then
-    -- voltou a usar: cancela timers de parada e do hold de completed
+    -- Voltou a rodar: cancela debounce e qualquer fim de ciclo pendente
     clear_timer(device, "debounce_timer")
     clear_timer(device, "end_gap_timer")
 
-    local current = get_cycle_state(device)
+    local current = device:get_field("cycle_state") or "idle"
 
-    -- Se estava idle ou completed, entra em started e agenda promoção
+    -- Se você já tem o conceito "started" (como apareceu no seu log),
+    -- aqui você pode manter started no primeiro instante e depois promover pra running após X.
+    -- Vou manter simples: já marca running direto (como estava antes).
     if current ~= "running" then
       device:set_field("cycle_state", "running", { persist = false })
       device:emit_event(cycleCap.cycleState("running", { state_change = true }))
     end
-    -- Se já estava started/running, mantém
 
     start_running(device)
     emit_utilization(device, true)
     return
   end
 
-  -- possível parada: confirma após debounce
+  -- Possível parada: só confirma após debounce
   set_timer(device, "debounce_timer", DEBOUNCE_SECONDS, function()
     emit_utilization(device, false)
 
-    device:set_field("cycle_state", "idle", { persist = false })
-    device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
-
+    -- Fecha o trecho rodando e acumula
     stop_running_and_accumulate(device)
 
-    -- Agora sim: agenda a validação do fim do ciclo para daqui END_GAP_SECONDS
-    schedule_end_gap_check(device)
+    -- Em vez de setar idle imediatamente e "matar" a chance de completed,
+    -- a gente agenda a checagem de fim de ciclo.
+    clear_timer(device, "end_gap_timer")
+
+    local stop_at = device:get_field("last_stop_at")
+    if stop_at then
+      set_timer(device, "end_gap_timer", END_GAP_SECONDS, function()
+        finalize_cycle_if_due(device, stop_at)
+      end)
+    end
+
+    -- Enquanto espera o END_GAP_SECONDS, o estado pode ficar "idle" OU "paused".
+    -- Como sua capability atual tem idle/running/completed, vamos manter idle aqui.
+    device:set_field("cycle_state", "idle", { persist = false })
+    device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
   end)
 end
 
@@ -242,16 +264,11 @@ end
 local function device_init(driver, device)
   clear_timer(device, "debounce_timer")
   clear_timer(device, "end_gap_timer")
-  clear_timer(device, "started_timer")
-  clear_timer(device, "completed_hold_timer")
+  device:subscribe()
 
-  device:set_field("in_use", false, { persist = false })
-
-  emit_utilization(device, false)
-  set_cycle_state(device, "idle")
-
-  -- Em Matter, init pode chegar antes do channel; usa retry seguro
-  retry_subscribe_and_refresh(device, 8)
+  emit_utilization(device, false) -- assume parado
+  device:set_field("cycle_state", "idle", { persist = false })
+  device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
 end
 
 local function device_added(driver, device)
@@ -260,20 +277,16 @@ local function device_added(driver, device)
 end
 
 local function device_driver_switched(driver, device, event, args)
-  -- NÃO chame subscribe/send direto aqui (pode estar sem matter_channel)
   clear_timer(device, "debounce_timer")
   clear_timer(device, "end_gap_timer")
-  clear_timer(device, "started_timer")
-  clear_timer(device, "completed_hold_timer")
+  device:subscribe()
 
-  device:set_field("in_use", false, { persist = false })
   emit_utilization(device, false)
-  set_cycle_state(device, "idle")
+  device:set_field("cycle_state", "idle", { persist = false })
+  device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
 
-  -- agenda retry; dá tempo do runtime "reatar" o canal Matter
-  device.thread:call_with_delay(1, function()
-    retry_subscribe_and_refresh(device, 8)
-  end)
+  device:send(BooleanState.attributes.StateValue:read(device))
+  device:send(PowerSource.attributes.BatPercentRemaining:read(device))
 end
 
 -- =========================
