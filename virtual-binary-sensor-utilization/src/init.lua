@@ -1,77 +1,21 @@
-local MatterDriver        = require "st.matter.driver"
-local capabilities        = require "st.capabilities"
+local MatterDriver      = require "st.matter.driver"
+local capabilities      = require "st.capabilities"
 
-local cycleCap            = capabilities["signalprogram56169.cycleState"]
+local cycleCap          = capabilities["signalprogram56169.cycleState"]
 
-local clusters            = require "st.matter.clusters" -- conforme doc oficial
-local BooleanState        = clusters.BooleanState
-local PowerSource         = clusters.PowerSource
+local clusters          = require "st.matter.clusters"
+local BooleanState      = clusters.BooleanState
+local PowerSource       = clusters.PowerSource
 
-local DEBOUNCE_SECONDS    = 20  -- ajuste aqui (ex.: 10, 20, 30)
-
-local MIN_RUNTIME_SECONDS = 300 -- ex.: 2 min. Ajuste conforme sua realidade
-local END_GAP_SECONDS     = 480 -- 8 min (parado estável = fim de ciclo)
-
-local function now_seconds()
-  -- Edge Lua tem os.time() (segundos). Suficiente pra duração.
-  return os.time()
-end
-
--- helpers
-local function start_running(device)
-  if not device:get_field("run_started_at") then
-    device:set_field("run_started_at", now_seconds(), { persist = false })
-  end
-end
-
-local function stop_running_and_accumulate(device)
-  local started = device:get_field("run_started_at")
-  if not started then return end
-
-  local acc = device:get_field("run_accumulated_s") or 0
-  local dur = now_seconds() - started
-  if dur < 0 then dur = 0 end
-
-  device:set_field("run_accumulated_s", acc + dur, { persist = false })
-  device:set_field("run_started_at", nil, { persist = false })
-  device:set_field("last_stop_at", now_seconds(), { persist = false })
-end
-
-local function finalize_cycle_if_due(device)
-  local acc = device:get_field("run_accumulated_s") or 0
-  local last_stop = device:get_field("last_stop_at")
-
-  if not last_stop then return end
-  local gap = now_seconds() - last_stop
-  if gap < END_GAP_SECONDS then return end
-
-  if acc >= MIN_RUNTIME_SECONDS then
-    device.log.info(string.format("Cycle finished. duration=%ds (~%.1f min)", acc, acc / 60))
-
-    device:set_field("cycle_state", "completed", { persist = false })
-    device:emit_event(cycleCap.cycleState("completed", { state_change = true }))
-
-    device.thread:call_with_delay(3, function()
-      device:set_field("cycle_state", "idle", { persist = false })
-      device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
-    end)
-  else
-    device.log.info(string.format("Ignored short run (noise). duration=%ds", acc))
-    -- opcional: garantir idle aqui também
-    device:set_field("cycle_state", "idle", { persist = false })
-  end
-
-  device:set_field("run_accumulated_s", 0, { persist = false })
-  device:set_field("last_stop_at", nil, { persist = false })
-end
+-- Ajustes
+local RUNNING_AFTER_SEC = 120 -- 2 min: Ciclo "Em execução"
+local IDLE_AFTER_SEC    = 300 -- 5 min parado: Ciclo "Parado"
 
 local function set_timer(device, field_name, seconds, fn)
-  -- Cancela timer anterior, se existir
   local old = device:get_field(field_name)
   if old then
     device.thread:cancel_timer(old)
   end
-  -- Cria novo timer
   local ref = device.thread:call_with_delay(seconds, fn)
   device:set_field(field_name, ref, { persist = false })
 end
@@ -89,42 +33,78 @@ local function emit_utilization(device, in_use)
   device:emit_event(capabilities.applianceUtilization.status(status))
 end
 
+local function set_cycle_state(device, new_state)
+  local current = device:get_field("cycle_state") or "idle"
+  if current == new_state then return end
+  device:set_field("cycle_state", new_state, { persist = false })
+  device:emit_event(cycleCap.cycleState(new_state, { state_change = true }))
+end
+
+local function clear_all_timers(device)
+  clear_timer(device, "running_timer")
+  clear_timer(device, "idle_timer")
+end
+
+-- Em uso:
+-- 1) ciclo = started imediato
+-- 2) após 2 min (se ainda em uso) -> running
+local function on_in_use(device)
+  clear_timer(device, "idle_timer") -- se estava parado, cancela retorno ao idle
+
+  device:set_field("in_use", true, { persist = false })
+  emit_utilization(device, true)
+  set_cycle_state(device, "started")
+
+  set_timer(device, "running_timer", RUNNING_AFTER_SEC, function()
+    local still_in_use = device:get_field("in_use") == true
+    if still_in_use then
+      set_cycle_state(device, "running")
+    end
+  end)
+end
+
+-- Não está em uso:
+-- 1) ciclo = completed imediato
+-- 2) após 5 min (se ainda não em uso) -> idle
+local function on_not_in_use(device)
+  clear_timer(device, "running_timer") -- não faz sentido virar running se parou
+
+  device:set_field("in_use", false, { persist = false })
+  emit_utilization(device, false)
+  set_cycle_state(device, "completed")
+
+  set_timer(device, "idle_timer", IDLE_AFTER_SEC, function()
+    local still_not_in_use = device:get_field("in_use") == false
+    if still_not_in_use then
+      set_cycle_state(device, "idle")
+    end
+  end)
+end
+
 local function boolean_state_handler(driver, device, ib, response)
   local value = ib.data.value
   if value == nil then return end
 
-  local in_use = (value == false) -- false=rodando, true=parado
+  -- Pelo seu padrão: false = rodando, true = parado
+  local in_use = (value == false)
+
+  local prev = device:get_field("in_use")
+  if prev == nil then prev = false end
+
+  -- Se não mudou, não faz nada
+  if in_use == prev then return end
 
   if in_use then
-    clear_timer(device, "debounce_timer")
-
-    local current = device:get_field("cycle_state") or "idle"
-    if current ~= "running" then
-      device:set_field("cycle_state", "running", { persist = false })
-      device:emit_event(cycleCap.cycleState("running", { state_change = true }))
-    end
-
-    start_running(device)
-    emit_utilization(device, true)
-    return
+    on_in_use(device)
+  else
+    on_not_in_use(device)
   end
-
-  set_timer(device, "debounce_timer", DEBOUNCE_SECONDS, function()
-    emit_utilization(device, false)
-
-    device:set_field("cycle_state", "idle", { persist = false })
-    device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
-
-    stop_running_and_accumulate(device)
-    finalize_cycle_if_due(device)
-  end)
 end
 
 local function battery_handler(driver, device, ib, response)
-  local raw = ib.data.value -- ex.: 200
+  local raw = ib.data.value
   if raw == nil then return end
 
-  -- Matter costuma usar 0..200 (meio por cento)
   local pct = math.floor(raw / 2)
   if pct < 0 then pct = 0 end
   if pct > 100 then pct = 100 end
@@ -138,26 +118,27 @@ local function do_refresh(driver, device, command)
 end
 
 local function device_init(driver, device)
-  clear_timer(device, "debounce_timer")
+  clear_all_timers(device)
   device:subscribe()
 
-  emit_utilization(device, false) -- assume parado
-  device:set_field("cycle_state", "idle", { persist = false })
-  device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
+  device:set_field("in_use", false, { persist = false })
+  emit_utilization(device, false)
+  set_cycle_state(device, "idle")
 end
 
 local function device_added(driver, device)
-  -- opcional: estado inicial
+  device:set_field("in_use", false, { persist = false })
   emit_utilization(device, false)
+  set_cycle_state(device, "idle")
 end
 
 local function device_driver_switched(driver, device, event, args)
-  clear_timer(device, "debounce_timer")
+  clear_all_timers(device)
   device:subscribe()
 
+  device:set_field("in_use", false, { persist = false })
   emit_utilization(device, false)
-  device:set_field("cycle_state", "idle", { persist = false })
-  device:emit_event(cycleCap.cycleState("idle", { state_change = true }))
+  set_cycle_state(device, "idle")
 
   device:send(BooleanState.attributes.StateValue:read(device))
   device:send(PowerSource.attributes.BatPercentRemaining:read(device))

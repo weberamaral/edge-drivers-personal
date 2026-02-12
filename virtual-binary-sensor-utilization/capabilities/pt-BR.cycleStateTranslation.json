@@ -4,10 +4,11 @@
   "attributes": {
     "cycleState": {
       "label": "Ciclo",
-      "displayTemplate": "{{attribute}} do {{device.label}}: {{value}}",
+      "displayTemplate": "{{attribute}}: {{value}}",
       "i18n": {
         "value": {
           "idle": { "label": "Parado" },
+          "started": { "label": "Iniciado" },
           "running": { "label": "Em execução" },
           "completed": { "label": "Concluído" }
         }
