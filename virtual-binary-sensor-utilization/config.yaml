@@ -1,4 +1,4 @@
-name: "MatterBridge Virtual Utilization v2"
+name: "MatterBridge Virtual Utilization v1"
 packageKey: matter-bridge-virtual-utilization
 description: "MatterBridge Virtual Binary Sensor mapped to Appliance Utilization"
 permissions:
