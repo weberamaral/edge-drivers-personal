@@ -1,0 +1,40 @@
+{
+  "dashboard": {
+    "states": [
+      {
+        "label": "Ciclos: {{count.value}}",
+        "alternatives": []
+      }
+    ],
+    "actions": []
+  },
+  "detailView": [
+    {
+      "label": "Ciclos completos",
+      "displayType": "state",
+      "state": {
+        "label": "{{count.value}}"
+      }
+    },
+    {
+      "label": "Zerar contador",
+      "displayType": "pushButton",
+      "pushButton": {
+        "command": "reset"
+      }
+    }
+  ],
+  "automation": {
+    "conditions": [
+      {
+        "label": "Ciclos completos",
+        "displayType": "numberField",
+        "numberField": {
+          "value": "count.value",
+          "range": [0, 10000]
+        }
+      }
+    ],
+    "actions": []
+  }
+}

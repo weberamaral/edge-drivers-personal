@@ -1,0 +1,14 @@
+{
+  "tag": "pt-BR",
+  "label": "Contador de ciclos",
+  "attributes": {
+    "count": {
+      "label": "Ciclos completos"
+    }
+  },
+  "commands": {
+    "reset": {
+      "label": "Zerar contador"
+    }
+  }
+}
