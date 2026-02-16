@@ -11,6 +11,7 @@ local PowerSource       = clusters.PowerSource
 -- Ajustes
 local RUNNING_AFTER_SEC = 120 -- 2 min: Ciclo "Em execução"
 local IDLE_AFTER_SEC    = 300 -- 5 min parado: Ciclo "Parado"
+local POLL_INTERVAL     = 30  -- segundos (30 ou 60 é ideal)
 
 local function set_timer(device, field_name, seconds, fn)
   local old = device:get_field(field_name)
@@ -29,6 +30,28 @@ local function clear_timer(device, field_name)
   end
 end
 
+local function start_polling(device)
+  -- evita duplicar polling
+  if device:get_field("polling_started") then return end
+  device:set_field("polling_started", true, { persist = false })
+
+  local function poll_tick()
+    device:send(BooleanState.attributes.StateValue:read(device))
+    device:send(PowerSource.attributes.BatPercentRemaining:read(device))
+
+    -- loop: reagenda o próximo tick
+    set_timer(device, "poll_timer", POLL_INTERVAL, poll_tick)
+  end
+
+  -- começa rápido após init/switch (pra atualizar UI logo)
+  set_timer(device, "poll_timer", 1, poll_tick)
+end
+
+local function stop_polling(device)
+  clear_timer(device, "poll_timer")
+  device:set_field("polling_started", false, { persist = false })
+end
+
 local function emit_utilization(device, in_use)
   local status = in_use and "inUse" or "notInUse"
   device:emit_event(capabilities.applianceUtilization.status(status))
@@ -44,6 +67,7 @@ end
 local function clear_all_timers(device)
   clear_timer(device, "running_timer")
   clear_timer(device, "idle_timer")
+  stop_polling(device)
 end
 
 -- ===== Cycle Count helpers =====
@@ -161,8 +185,7 @@ local function device_init(driver, device)
   emit_utilization(device, false)
   set_cycle_state(device, "idle")
 
-  -- emite contador persistido ao iniciar
-  emit_cycle_count(device, get_cycle_count(device))
+  start_polling(device)
 end
 
 local function device_added(driver, device)
@@ -171,6 +194,8 @@ local function device_added(driver, device)
   set_cycle_state(device, "idle")
 
   emit_cycle_count(device, get_cycle_count(device))
+
+  start_polling(device)
 end
 
 local function device_driver_switched(driver, device, event, args)
@@ -183,8 +208,11 @@ local function device_driver_switched(driver, device, event, args)
 
   emit_cycle_count(device, get_cycle_count(device))
 
+  -- leitura imediata
   device:send(BooleanState.attributes.StateValue:read(device))
   device:send(PowerSource.attributes.BatPercentRemaining:read(device))
+
+  start_polling(device)
 end
 
 local driver_template = {
